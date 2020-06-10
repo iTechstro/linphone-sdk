@@ -6,6 +6,7 @@
   except:
     variables:
       - $DOCKER_UPDATE
+      - $SKIP_IOS
 
   script:
     - ccache -s
@@ -19,10 +20,14 @@
     - echo $ADDITIONAL_BUILD_OPTIONS
     - echo $ADDITIONAL_BUILD_CONFIGURATIONS
     - cmake --build . $ADDITIONAL_BUILD_CONFIGURATIONS --target sdk -- $ADDITIONAL_BUILD_OPTIONS
+    # get SDK version from cached cmake variables
+    - cmake --log-level=ERROR -L ../CMakeLists.txt | grep LINPHONESDK_VERSION | cut -d "=" -f2 > linphonesdkversion.txt
+    - cat linphonesdkversion.txt
     - ccache -s
 
   artifacts:
     paths:
+      - build-ios/linphonesdkversion.txt
       - build-ios/linphone-sdk-*.zip
       - build-ios/linphone-sdk.podspec
       - build-ios/docs
@@ -122,8 +127,11 @@ test-liblinphone-ios:
 
   variables:
     LOG_PATTERN: "logLiblinphoneIos"
+    XML_PATTERN: "TEST"
+    NUMBER_DEVICES: 4
 
   script:
+    - if timeout --signal=SIGINT 1 xcrun simctl list; then echo "show all devices"; else killall -9 com.apple.CoreSimulator.CoreSimulatorService; echo "restart core service"; fi
     - unzip build-ios/linphone-sdk-*.zip -d build-ios/
     - cd ${CI_PROJECT_DIR}/tester/IOS/LinphoneTester
     - echo ${CI_PROJECT_DIR}/tester/IOS/LinphoneTester
@@ -134,11 +142,12 @@ test-liblinphone-ios:
         xcodebuild -workspace LinphoneTester.xcworkspace \
         -scheme LinphoneTester -sdk iphonesimulator \
         -destination name='iPhone 8' \
+        -parallel-testing-enabled YES -parallel-testing-worker-count $NUMBER_DEVICES \
         -derivedDataPath $WORKSPACE build test 2>&1 | tee $LOG_PATTERN.txt
 
   after_script:
-    #ocunit2junit will produce .xml file by testsuite.
-    - cat tester/IOS/LinphoneTester/$LOG_PATTERN.txt | ocunit2junit
+    - xcresult2junit.rb ${CI_PROJECT_DIR}/tester/IOS/LinphoneTester/build/Logs/Test/*.xcresult | tee $XML_PATTERN.xml
+
 
     - BRANCH=$CI_COMMIT_REF_NAME
     - echo $BRANCH
@@ -163,8 +172,8 @@ test-liblinphone-ios:
 
     #Gathering artifacts in one folder to ease their use
     - mkdir ${CI_PROJECT_DIR}/results
+    - cp -r $XML_PATTERN.xml ${CI_PROJECT_DIR}/results
     - cp -r tester/IOS/LinphoneTester/$LOG_PATTERN.txt ${CI_PROJECT_DIR}/results
-    - cp -r test-reports/* ${CI_PROJECT_DIR}/results
     - cp index.html ${CI_PROJECT_DIR}/results
 
   artifacts:
